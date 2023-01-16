@@ -49,15 +49,22 @@ class Rates:
             negative logarithm of the rates. This attribute will be recreated based on the updated 
             banks_table attribute
         """        
+        # Add a column with best rate for each currency pair
+        # Drops the "best_rate" column since it shouldn't be considered
+        # Ignore error - in the initial run there is no "best_rate" column so we simply ignore the drop call
         self.banks_table['best_rate'] = self.banks_table.select_dtypes(np.number).drop(
             'best_rate', axis=1, errors='ignore').max(axis=1)
+        # Add a column with the bank which offers the best rate for each currency pair
         self.banks_table['best_bank'] = self.banks_table.select_dtypes(np.number).drop(
             'best_rate', axis=1, errors='ignore').idxmax(axis=1)
 
+        # Create a pivot table from the best rates so we can use it as an adjacency matrix
         self.rates = pd.pivot_table(self.banks_table, index='source', 
             columns='target', values='best_rate')
 
         log_of_rates = -np.log(self.rates)
+
+        # Create the exchange graph
         self.rates_graph = nx.from_pandas_adjacency(log_of_rates, create_using=nx.DiGraph())
         
     def update_graph(self, updates):
@@ -71,8 +78,14 @@ class Rates:
         """        
         for update in updates:
             source, target, bank, new_rate = update['from'], update['to'], update['bank'], update['rate']
+
+            # Assign the new rate in the corresponding row (source and target) and column (bank to be updated)
             self.banks_table.loc[(self.banks_table['source']==source) 
                 & (self.banks_table['target']==target) , bank] = new_rate
+            
+            # We update the best_rate, best_bank and the induced graph
+            # This can be optimized but for this scale we will keep it simple
+            # TODO: optimize
             self._update_table_and_graph()
     
     def _path_to_list_of_dicts(self, path):
@@ -113,9 +126,14 @@ class Rates:
         try:
             value, path = nx.single_source_bellman_ford(self.rates_graph, source, target)
         except nx.NetworkXNoPath:
+            # In the case that there is no path from source to target we should return an empty string
             return ""
         except nx.NetworkXUnbounded:
+            # We where told that the data won't contain any endless cycles, 
+            # but still better safe then sorry
             print(f"found negative cycle: {nx.find_negative_cycle(self.rates_graph, source)}")
+            print("You can use this cycle and get infinitely amount of money!")
+            print("Congratulations you are now the riches man on earth.")
             return ""
         return self._path_to_list_of_dicts(path)
 
